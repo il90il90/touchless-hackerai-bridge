@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { createServer } from "node:http";
-import { hostname } from "node:os";
+import { hostname, networkInterfaces } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as oauth from "./oauth.mjs";
@@ -38,7 +38,19 @@ const cfg = {
   cli: env.BRIDGE_CLI || resolve(HERE, "../../cli/touchless.mjs"),
   outDir: env.TOUCHLESS_OUT_DIR || "/home/node/work/touchless-out",
   extraHosts: String(env.BRIDGE_ALLOWED_HOSTS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+  lanHint: String(env.BRIDGE_LAN_HINT || ""), // set by compose when the port is published to the LAN, for the IP card
 };
+/** Idle lock: the session needs the password again after this long without activity (owner wanted 10 minutes). */
+const LOCK_MS = Number(env.BRIDGE_LOCK_MS) > 0 ? Number(env.BRIDGE_LOCK_MS) : Math.max(1, Number(env.BRIDGE_LOCK_MINUTES || 10)) * 60_000;
+const LOCK_MINUTES = Math.max(1, Math.round(LOCK_MS / 60_000));
+
+/** Answer only to localhost, a bare IP literal (LAN use), or an allow-listed name — never an arbitrary domain. */
+function isAllowedHost(hostname) {
+  if (["localhost", "127.0.0.1", "::1"].includes(hostname) || cfg.extraHosts.includes(hostname)) return true;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) return true; // IPv4 literal (LAN)
+  if (/^[0-9a-f:]+$/.test(hostname) && hostname.includes(":")) return true; // IPv6 literal
+  return false;
+}
 // Only drop privileges when there are privileges to drop (tests and a plain `node server.mjs` run as one user).
 const asAgent = typeof process.getuid === "function" && process.getuid() === 0
   ? { uid: cfg.agentUid, gid: cfg.agentGid } : {};
@@ -120,11 +132,12 @@ const panel = createServer(async (req, res) => {
 async function route(req, res) {
   const url = new URL(req.url, "http://panel");
   const path = url.pathname;
-  // DNS rebinding: only answer to the names this panel is opened by.
+  // DNS rebinding: answer only to localhost, a bare IP (LAN use), or a name the owner allow-listed. A domain name
+  // (how a rebinding attack reaches a private IP) is refused, so turning on LAN access stays safe behind the login.
   const host = String(req.headers.host ?? "").toLowerCase();
   const hostname = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
-  if (!["localhost", "127.0.0.1", "::1", ...cfg.extraHosts].includes(hostname)) {
-    return sendJson(res, 421, { error: "Open the panel at http://localhost:" + cfg.panelPort });
+  if (!isAllowedHost(hostname)) {
+    return sendJson(res, 421, { error: `Open the panel at http://localhost:${cfg.panelPort} (or your PC's LAN IP when LAN access is on).` });
   }
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -152,34 +165,61 @@ async function route(req, res) {
   const session = cookie(req, "bridge_session");
 
   if (path === "/api/session") {
-    return sendJson(res, 200, { passwordSet: store.hasPassword(), loggedIn: store.validSession(session) });
+    return sendJson(res, 200, {
+      passwordSet: store.hasPassword(),
+      loggedIn: store.validSession(session),
+      locked: store.validSession(session) && store.sessionLocked(session, LOCK_MS),
+      username: store.username(),
+      hasUsername: store.username() !== "",
+      lockMinutes: LOCK_MINUTES,
+    });
   }
   if (path === "/api/setup" && req.method === "POST") {
-    if (store.hasPassword()) return sendJson(res, 409, { error: "The panel already has a password. Log in." });
+    if (store.hasPassword()) return sendJson(res, 409, { error: "The panel already has an account. Log in." });
     const pw = String(body.password ?? "");
-    if (pw.length < 8) return sendJson(res, 400, { error: "Use at least 8 characters." });
-    store.setPassword(pw);
+    if (pw.length < 8) return sendJson(res, 400, { error: "Use at least 8 characters for the password." });
+    store.setAccount(body.username, pw);
     return login(res);
   }
   if (path === "/api/login" && req.method === "POST") {
     const ip = req.socket.remoteAddress ?? "";
     const f = loginFails.get(ip);
     if (f && f.until > Date.now()) return sendJson(res, 429, { error: "Too many tries. Wait a minute." });
-    if (!store.checkPassword(String(body.password ?? ""))) {
+    if (!store.checkLogin(body.username, String(body.password ?? ""))) {
       const n = (f?.n ?? 0) + 1;
       loginFails.set(ip, { n, until: n >= 5 ? Date.now() + 60_000 : 0 });
-      return sendJson(res, 401, { error: "Wrong password." });
+      return sendJson(res, 401, { error: store.username() ? "Wrong username or password." : "Wrong password." });
     }
     loginFails.delete(ip);
     return login(res);
   }
   if (!store.validSession(session)) return sendJson(res, 401, { error: "Log in first." });
 
+  // The idle lock: after LOCK_MS without activity the session needs the password again. Only session/unlock/logout
+  // pass while locked; everything else waits so an unattended phone or PC can't be used or reconfigured.
+  const locked = store.sessionLocked(session, LOCK_MS);
+  if (path === "/api/unlock" && req.method === "POST") {
+    if (!store.checkPassword(String(body.password ?? ""))) return sendJson(res, 401, { error: "Wrong password." });
+    store.touchSession(session);
+    return sendJson(res, 200, { ok: true });
+  }
+  if (locked && path !== "/api/logout") return sendJson(res, 423, { locked: true, error: "Locked. Enter your password." });
+  store.touchSession(session);
+
   if (path === "/api/logout" && req.method === "POST") {
     store.endSession(session);
     res.setHeader("Set-Cookie", "bridge_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
     return sendJson(res, 200, { ok: true });
   }
+  if (path === "/api/account" && req.method === "POST") {
+    if (!store.checkPassword(String(body.current ?? ""))) return sendJson(res, 401, { error: "Current password is wrong." });
+    const pw = body.password ? String(body.password) : String(body.current);
+    if (body.password && pw.length < 8) return sendJson(res, 400, { error: "The new password needs at least 8 characters." });
+    store.setAccount(body.username ?? store.username(), pw, true);
+    store.touchSession(session);
+    return sendJson(res, 200, { ok: true, username: store.username() });
+  }
+  if (path === "/api/netinfo") return sendJson(res, 200, netInfo(req));
   if (path === "/api/state") return sendJson(res, 200, state());
 
   // ---- HackerAI ----
@@ -297,6 +337,27 @@ function login(res) {
   const { token, maxAge } = store.newSession();
   res.setHeader("Set-Cookie", `bridge_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`);
   return sendJson(res, 200, { ok: true });
+}
+
+/** Addresses for reaching the panel — the one you're on now, plus how to open it from the phone over the LAN. */
+function netInfo(req) {
+  const host = String(req.headers.host ?? "");
+  const hostname = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
+  const viaLan = !["localhost", "127.0.0.1", "::1", ""].includes(hostname);
+  const addresses = [];
+  try {
+    for (const list of Object.values(networkInterfaces())) {
+      for (const a of list || []) if (a.family === "IPv4" && !a.internal) addresses.push(a.address);
+    }
+  } catch { /* none */ }
+  return {
+    port: cfg.panelPort,
+    currentUrl: host ? `http://${host}` : "",
+    viaLan,
+    lanEnabled: viaLan || (!!cfg.lanHint && !["127.0.0.1", "localhost", "::1"].includes(cfg.lanHint)),
+    // Inside Docker these are the container's own addresses, not the PC's LAN IP; the panel says to use ipconfig.
+    containerAddresses: addresses,
+  };
 }
 
 function state() {

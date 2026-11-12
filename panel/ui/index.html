@@ -8,15 +8,34 @@
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <!-- Password: first visit sets it, later visits log in -->
+  <!-- Account: first visit sets username + password, later visits log in -->
   <main id="auth" class="auth" hidden>
     <form id="auth-form" class="card auth-card">
       <h1>Touchless bridge</h1>
       <p id="auth-text" class="muted"></p>
-      <label for="auth-password">Panel password</label>
+      <div id="auth-username-row">
+        <label for="auth-username">Username</label>
+        <input id="auth-username" autocomplete="username" maxlength="60">
+      </div>
+      <label for="auth-password">Password</label>
       <input id="auth-password" type="password" autocomplete="current-password" required minlength="8">
       <p id="auth-error" class="error" hidden></p>
       <button id="auth-button" type="submit" class="primary"></button>
+    </form>
+  </main>
+
+  <!-- Idle lock: shown after inactivity; re-enter the password to continue -->
+  <main id="lock" class="auth" hidden>
+    <form id="lock-form" class="card auth-card">
+      <h1>Locked</h1>
+      <p class="muted">The bridge locked itself after being idle. Enter your password to continue.</p>
+      <label for="lock-password">Password</label>
+      <input id="lock-password" type="password" autocomplete="current-password" required>
+      <p id="lock-error" class="error" hidden></p>
+      <div class="row">
+        <button id="lock-button" type="submit" class="primary">Unlock</button>
+        <button id="lock-logout" type="button" class="link">Log out</button>
+      </div>
     </form>
   </main>
 
@@ -124,6 +143,35 @@
         <div class="row">
           <a class="button" href="https://hackerai.co" target="_blank" rel="noopener">Open HackerAI</a>
         </div>
+      </article>
+
+      <article class="card">
+        <h2>Open it on your phone</h2>
+        <p class="muted">The panel is mobile-friendly, so you can run the whole setup from your phone's browser. It needs LAN access on and your PC's LAN IP.</p>
+        <p id="net-current" class="ok-line"></p>
+        <div id="net-lan-off" class="notice" hidden>
+          <p><b>LAN access is off</b> (panel is on this PC only). To reach it from your phone, restart the bridge with the port opened to your network:</p>
+          <pre class="json">BRIDGE_BIND=0.0.0.0 docker compose up -d</pre>
+          <p class="muted">Then on your phone's browser open <code>http://&lt;your PC's LAN IP&gt;:<span class="net-port">8790</span></code> — find the IP with <code>ipconfig</code> (Windows) or <code>ip addr</code>. Keep both on the same Wi-Fi. For access from outside your home, use Tailscale rather than forwarding the port.</p>
+        </div>
+        <div id="net-lan-on" class="notice" hidden>
+          <p><b>LAN access is on.</b> On your phone's browser (same Wi-Fi) open <code>http://&lt;your PC's LAN IP&gt;:<span class="net-port">8790</span></code> — find the IP with <code>ipconfig</code>. Log in with your username and password. The panel locks itself after <span id="net-lock">10</span> minutes idle.</p>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>Account &amp; lock</h2>
+        <p class="muted">Username and password protect the panel (needed once you open it to your phone). It locks after <span class="net-lock">10</span> minutes idle and asks for the password again.</p>
+        <form id="account-form" class="stack">
+          <label for="acc-username">Username</label>
+          <input id="acc-username" autocomplete="username" maxlength="60" placeholder="(optional)">
+          <label for="acc-current">Current password</label>
+          <input id="acc-current" type="password" autocomplete="current-password" placeholder="Required to save a change">
+          <label for="acc-new">New password</label>
+          <input id="acc-new" type="password" autocomplete="new-password" placeholder="Leave blank to keep it" minlength="8">
+          <div class="row"><button type="submit" class="primary">Save account</button></div>
+        </form>
+        <p id="account-msg" class="msg" hidden></p>
       </article>
     </section>
 

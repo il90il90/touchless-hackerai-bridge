@@ -31,17 +31,28 @@ export class Store {
   get hackerai() { return this.data.hackerai ?? {}; }
   get touchless() { return this.data.touchless ?? {}; }
 
-  // ---- panel password and sessions -------------------------------------------------------------------
+  // ---- panel account (username + password) and sessions ----------------------------------------------
 
   hasPassword() {
     return typeof this.data.panel?.passwordHash === "string";
   }
 
-  setPassword(password) {
+  /** The login username, or "" when the account is password-only (legacy, or set that way). */
+  username() {
+    return typeof this.data.panel?.username === "string" ? this.data.panel.username : "";
+  }
+
+  /** Set (or change) the account. Keeps existing sessions unless keepSessions is false. */
+  setAccount(username, password, keepSessions = false) {
     const salt = randomBytes(16);
     const hash = scryptSync(password, salt, 64, SCRYPT);
     this.update((d) => {
-      d.panel = { ...(d.panel ?? {}), passwordHash: `scrypt$${salt.toString("base64")}$${hash.toString("base64")}`, sessions: [] };
+      d.panel = {
+        ...(d.panel ?? {}),
+        username: String(username ?? "").trim().slice(0, 60),
+        passwordHash: `scrypt$${salt.toString("base64")}$${hash.toString("base64")}`,
+        sessions: keepSessions ? (d.panel?.sessions ?? []) : [],
+      };
     });
   }
 
@@ -50,26 +61,56 @@ export class Store {
     if (typeof stored !== "string" || typeof password !== "string") return false;
     const [, salt, hash] = stored.split("$");
     const want = Buffer.from(hash, "base64");
-    const got = scryptSync(password, Buffer.from(salt, "base64"), want.length, SCRYPT);
-    return timingSafeEqual(want, got);
+    let got;
+    try { got = scryptSync(password, Buffer.from(salt, "base64"), want.length, SCRYPT); } catch { return false; }
+    return want.length === got.length && timingSafeEqual(want, got);
   }
 
-  /** A new browser session; only its hash is stored. */
+  /** The login check: password always, and the username too when one is set (case-insensitive). */
+  checkLogin(username, password) {
+    const want = this.username();
+    if (want && String(username ?? "").trim().toLowerCase() !== want.toLowerCase()) return false;
+    return this.checkPassword(password);
+  }
+
+  /** A new browser session; only its hash is stored. `at` is the last-active time, for the idle lock. */
   newSession() {
     const token = randomBytes(32).toString("base64url");
     const now = Date.now();
     this.update((d) => {
       const live = (d.panel?.sessions ?? []).filter((s) => s.exp > now).slice(-19);
-      d.panel = { ...(d.panel ?? {}), sessions: [...live, { hash: sha256(token), exp: now + SESSION_DAYS * 86400_000 }] };
+      d.panel = { ...(d.panel ?? {}), sessions: [...live, { hash: sha256(token), exp: now + SESSION_DAYS * 86400_000, at: now }] };
     });
     return { token, maxAge: SESSION_DAYS * 86400 };
   }
 
-  validSession(token) {
-    if (!token) return false;
+  #session(token) {
+    if (!token) return null;
     const h = sha256(token);
     const now = Date.now();
-    return (this.data.panel?.sessions ?? []).some((s) => s.exp > now && safeEqual(s.hash, h));
+    return (this.data.panel?.sessions ?? []).find((s) => s.exp > now && safeEqual(s.hash, h)) ?? null;
+  }
+
+  validSession(token) {
+    return this.#session(token) !== null;
+  }
+
+  /** True when the session is valid but idle past [lockMs]. A session from before this feature (no `at`) counts as
+   *  active until its next request sets one, so upgrading the bridge doesn't lock everyone out at once. */
+  sessionLocked(token, lockMs) {
+    const s = this.#session(token);
+    if (!s || !s.at) return false;
+    return Date.now() - Number(s.at) > lockMs;
+  }
+
+  /** Mark a session active now (resets the idle timer); used on each authed request and on unlock. */
+  touchSession(token) {
+    if (!token) return;
+    const h = sha256(token);
+    this.update((d) => {
+      const s = (d.panel?.sessions ?? []).find((x) => x.hash === h);
+      if (s) s.at = Date.now();
+    });
   }
 
   endSession(token) {

@@ -4,6 +4,7 @@
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 let current = null;       // last /api/state
+let sessionInfo = { lockMinutes: 10, username: "" };
 let waitingSignIn = false;
 let logAfter = 0;
 let activityAfter = 0;
@@ -15,7 +16,8 @@ async function api(path, body) {
     : { method: "POST", headers: { "Content-Type": "application/json", "X-Bridge-Request": "1" }, body: JSON.stringify(body) };
   const r = await fetch(path, { credentials: "same-origin", cache: "no-store", ...opts });
   const j = await r.json().catch(() => ({}));
-  if (r.status === 401 && path !== "/api/login") { showAuth(true); throw new Error(j.error || "Log in first."); }
+  if (r.status === 401 && path !== "/api/login") { showAuth(true, false); throw new Error(j.error || "Log in first."); }
+  if (r.status === 423 && path !== "/api/unlock") { showLock(); throw new Error(j.error || "Locked."); }
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
 }
@@ -26,25 +28,29 @@ function msg(el, text, good) {
   el.hidden = !text;
 }
 
-// ---- password ------------------------------------------------------------------------------------------------
+// ---- account (username + password) and lock ------------------------------------------------------------------
 
-function showAuth(passwordSet) {
+function showAuth(passwordSet, hasUsername) {
+  $("lock").hidden = true;
   $("app").hidden = true;
   $("auth").hidden = false;
   $("auth-text").textContent = passwordSet
-    ? "Enter the panel password."
-    : "First visit: choose a password for this panel. HackerAI runs commands next to it, so it keeps your settings behind one.";
-  $("auth-button").textContent = passwordSet ? "Log in" : "Set password";
+    ? "Log in to the bridge."
+    : "First visit: choose a username and password for the bridge. HackerAI runs commands next to it, so it stays behind a login.";
+  $("auth-button").textContent = passwordSet ? "Log in" : "Create account";
   $("auth-password").autocomplete = passwordSet ? "current-password" : "new-password";
+  $("auth-password").minLength = passwordSet ? 1 : 8;
+  // On setup, always offer a username; on login, show it only when the account has one.
+  $("auth-username-row").hidden = passwordSet && !hasUsername;
   $("auth-form").dataset.mode = passwordSet ? "login" : "setup";
-  $("auth-password").focus();
+  ($("auth-username-row").hidden ? $("auth-password") : $("auth-username")).focus();
 }
 
 $("auth-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const mode = $("auth-form").dataset.mode;
   try {
-    await api(mode === "login" ? "/api/login" : "/api/setup", { password: $("auth-password").value });
+    await api(mode === "login" ? "/api/login" : "/api/setup", { username: $("auth-username").value, password: $("auth-password").value });
     $("auth-password").value = "";
     $("auth-error").hidden = true;
     start();
@@ -54,10 +60,57 @@ $("auth-form").addEventListener("submit", async (e) => {
   }
 });
 
+function showLock() {
+  $("app").hidden = true;
+  $("auth").hidden = true;
+  $("lock").hidden = false;
+  $("lock-password").value = "";
+  $("lock-error").hidden = true;
+  $("lock-password").focus();
+}
+
+$("lock-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await api("/api/unlock", { password: $("lock-password").value });
+    $("lock").hidden = true;
+    $("lock-password").value = "";
+    start();
+  } catch (err) {
+    $("lock-error").textContent = err.message;
+    $("lock-error").hidden = false;
+  }
+});
+$("lock-logout").addEventListener("click", async () => { await api("/api/logout", {}).catch(() => {}); location.reload(); });
+
 $("logout").addEventListener("click", async () => {
   await api("/api/logout", {}).catch(() => {});
   location.reload();
 });
+
+$("account-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api("/api/account", { username: $("acc-username").value, current: $("acc-current").value, password: $("acc-new").value });
+    $("acc-current").value = ""; $("acc-new").value = "";
+    msg($("account-msg"), `Saved${r.username ? ` — username "${r.username}"` : ""}.`, true);
+  } catch (err) {
+    msg($("account-msg"), err.message, false);
+  }
+});
+
+async function loadNetInfo() {
+  try {
+    const n = await api("/api/netinfo");
+    for (const el of document.querySelectorAll(".net-port")) el.textContent = String(n.port);
+    $("net-current").textContent = n.currentUrl ? `You're on ${n.currentUrl}` : "";
+    $("net-lan-on").hidden = !n.lanEnabled;
+    $("net-lan-off").hidden = n.lanEnabled;
+    const m = String(sessionInfo.lockMinutes ?? 10);
+    for (const el of document.querySelectorAll("#net-lock, .net-lock")) el.textContent = m;
+    if (document.activeElement !== $("acc-username") && !$("acc-username").value && sessionInfo.username) $("acc-username").value = sessionInfo.username;
+  } catch { /* shown elsewhere */ }
+}
 
 // ---- tabs ----------------------------------------------------------------------------------------------------
 
@@ -521,11 +574,18 @@ async function pollLog() {
 
 // ---- start ---------------------------------------------------------------------------------------------------
 
+async function loadSession() {
+  try { sessionInfo = await api("/api/session"); } catch { /* keep defaults */ }
+  return sessionInfo;
+}
+
 let timers = [];
 function start() {
   $("auth").hidden = true;
+  $("lock").hidden = true;
   $("app").hidden = false;
   timers.forEach(clearInterval);
+  loadSession().then(loadNetInfo);
   refresh();
   pollActivity();
   pollLog();
@@ -539,9 +599,10 @@ function start() {
 
 (async () => {
   try {
-    const s = await api("/api/session");
-    if (s.loggedIn) start();
-    else showAuth(s.passwordSet);
+    const s = await loadSession();
+    if (s.locked) showLock();
+    else if (s.loggedIn) start();
+    else showAuth(s.passwordSet, s.hasUsername);
   } catch (err) {
     document.body.textContent = `The bridge panel can't load: ${err.message}`;
   }

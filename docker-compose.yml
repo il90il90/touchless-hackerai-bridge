@@ -1,6 +1,6 @@
 # HackerAI Remote Control bridge for Touchless (#960). Setup: README.md in this folder.
-#   docker compose up -d --build
-#   then open http://localhost:8790 (set the panel password, connect the phone, paste HackerAI's command)
+#   docker compose up -d --build            → panel on http://localhost:8790 (this PC only)
+#   BRIDGE_BIND=0.0.0.0 docker compose up -d → also reachable from your phone over the LAN (set a username+password)
 name: touchless-hackerai
 services:
   hackerai-bridge:
@@ -12,9 +12,12 @@ services:
     image: touchless-hackerai-bridge:local
     # HackerAI lists the machine by this name ("select this computer").
     hostname: touchless-bridge
-    # The panel is for this computer only: never publish it on 0.0.0.0.
+    # This PC only by default. BRIDGE_BIND=0.0.0.0 opens it to your LAN so your phone can reach it (login required).
     ports:
-      - "127.0.0.1:${BRIDGE_PORT:-8790}:8790"
+      - "${BRIDGE_BIND:-127.0.0.1}:${BRIDGE_PORT:-8790}:8790"
+    environment:
+      # Lets the panel's "Open it on your phone" card know whether the port is open to the LAN.
+      BRIDGE_LAN_HINT: "${BRIDGE_BIND:-127.0.0.1}"
     restart: unless-stopped
     init: true
     # No Linux capabilities except what the panel needs to start HackerAI's client as the unprivileged user and stop

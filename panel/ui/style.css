@@ -208,3 +208,7 @@ pre.json {
 .tool-info:hover { border-color: var(--accent); color: var(--accent); }
 #tools-search { flex: 1 1 260px; width: auto; }
 @media (max-width: 560px) { .tool-desc { display: none; } }
+
+/* Account + lock */
+#auth-username-row { display: grid; gap: .5rem; }
+#lock .auth-card h1 { color: var(--warn); }
