@@ -1,0 +1,37 @@
+# HackerAI Remote Control bridge for Touchless (#960). Setup: README.md in this folder.
+#   docker compose up -d --build
+#   then open http://localhost:8790 (set the panel password, connect the phone, paste HackerAI's command)
+name: touchless-hackerai
+services:
+  hackerai-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HACKERAI_LOCAL_VERSION: ${HACKERAI_LOCAL_VERSION:-0.8.9}
+    image: touchless-hackerai-bridge:local
+    # HackerAI lists the machine by this name ("select this computer").
+    hostname: touchless-bridge
+    # The panel is for this computer only: never publish it on 0.0.0.0.
+    ports:
+      - "127.0.0.1:${BRIDGE_PORT:-8790}:8790"
+    restart: unless-stopped
+    init: true
+    # No Linux capabilities except what the panel needs to start HackerAI's client as the unprivileged user and stop
+    # it again. Add one on purpose only (for example NET_RAW for ping/nmap), knowing HackerAI's agent may use it.
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID, KILL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    mem_limit: 2g
+    # Only for a self-hosted relay on this PC (address http://host.docker.internal:8787/mcp/…).
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - bridge-config:/config
+      - hackerai-work:/home/node/work
+      # HackerAI's machine identity: the same computer after every restart or rebuild (open tasks keep working).
+      - hackerai-identity:/home/node/.hackerai
+volumes:
+  bridge-config:
+  hackerai-work:
+  hackerai-identity:

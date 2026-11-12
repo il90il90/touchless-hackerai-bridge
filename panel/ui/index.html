@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Touchless bridge</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <!-- Password: first visit sets it, later visits log in -->
+  <main id="auth" class="auth" hidden>
+    <form id="auth-form" class="card auth-card">
+      <h1>Touchless bridge</h1>
+      <p id="auth-text" class="muted"></p>
+      <label for="auth-password">Panel password</label>
+      <input id="auth-password" type="password" autocomplete="current-password" required minlength="8">
+      <p id="auth-error" class="error" hidden></p>
+      <button id="auth-button" type="submit" class="primary"></button>
+    </form>
+  </main>
+
+  <div id="app" hidden>
+    <header class="top">
+      <div class="brand">
+        <strong>Touchless bridge</strong>
+        <span class="muted">HackerAI ↔ your phone</span>
+      </div>
+      <div class="chips">
+        <span id="chip-phone" class="chip"></span>
+        <span id="chip-hackerai" class="chip"></span>
+      </div>
+      <button id="logout" class="link">Log out</button>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="setup" class="tab active">Setup</button>
+      <button role="tab" data-tab="console" class="tab">Console</button>
+      <button role="tab" data-tab="activity" class="tab">Activity</button>
+      <button role="tab" data-tab="log" class="tab">HackerAI log</button>
+    </nav>
+
+    <!-- Setup -->
+    <section id="tab-setup" class="tab-body">
+      <article class="card">
+        <h2><span class="step" id="step-phone">1</span> Connect your phone</h2>
+        <div id="phone-off">
+          <p class="muted">In Touchless on the phone: <b>Settings → AI connection</b>, copy the secure address and paste it here. The phone then asks you to approve the bridge.</p>
+          <form id="phone-connect" class="row">
+            <input id="phone-url" type="url" placeholder="https://mcp.touchless.tools/mcp/…" required>
+            <button type="submit" class="primary">Connect</button>
+          </form>
+          <div id="phone-waiting" class="notice" hidden>
+            <p><b>Approve on your phone.</b> A sign-in page opened in a new tab: tap the number it shows on the phone's
+              <i>Approve AI connection?</i> screen, choose the permission and confirm.</p>
+            <p><a id="phone-signin-link" target="_blank" rel="noopener">Open the sign-in page again</a> · <span class="muted">Waiting…</span></p>
+          </div>
+          <details class="advanced">
+            <summary>Use an API key instead</summary>
+            <p class="muted">For a key made in Touchless → Settings → AI connection → Advanced → API key.</p>
+            <form id="phone-key" class="stack">
+              <input id="key-url" type="url" placeholder="Secure address https://…/mcp/…" required>
+              <input id="key-value" type="password" placeholder="tlk.…" autocomplete="off" required>
+              <button type="submit">Save key</button>
+            </form>
+          </details>
+        </div>
+        <div id="phone-on" hidden>
+          <p id="phone-summary" class="ok-line"></p>
+          <p id="phone-problem" class="error" hidden></p>
+          <div class="row">
+            <button id="phone-test">Test</button>
+            <button id="phone-reconnect">Connect again</button>
+            <button id="phone-disconnect" class="danger">Disconnect</button>
+          </div>
+          <form id="phone-name" class="row small">
+            <label for="client-name">Name on the phone</label>
+            <input id="client-name" maxlength="60" required>
+            <button type="submit">Save</button>
+          </form>
+        </div>
+        <p id="phone-msg" class="msg" hidden></p>
+      </article>
+
+      <article class="card">
+        <h2><span class="step" id="step-hackerai">2</span> Connect HackerAI</h2>
+        <form id="hackerai-form" class="stack">
+          <label for="hackerai-command">In HackerAI: <b>Settings → Remote Control → Copy command</b>, then paste it here.</label>
+          <input id="hackerai-command" type="password" placeholder="npx @hackerai/local@latest --token …" autocomplete="off">
+          <label for="hackerai-name">Name for this machine in HackerAI</label>
+          <input id="hackerai-name" maxlength="60" placeholder="Touchless bridge">
+          <div class="row">
+            <button type="submit" class="primary" id="hackerai-save">Save and start</button>
+            <button type="button" id="hackerai-start">Start</button>
+            <button type="button" id="hackerai-stop">Stop</button>
+          </div>
+        </form>
+        <p id="hackerai-status" class="status-line"></p>
+        <p id="hackerai-msg" class="msg" hidden></p>
+      </article>
+
+      <article class="card">
+        <h2><span class="step" id="step-tell">3</span> Tell HackerAI about it</h2>
+        <p class="muted">In HackerAI → <b>Settings → Personalization</b>, paste each text into the field with the same name. Then, in a chat, select the bridge's computer and ask for anything on your phone: an action, an automation, an app to build in Touchless Studio or a mod of an installed app. Edit the texts here if you like; HackerAI takes up to <span id="instr-limit">1500</span> characters per field.</p>
+        <div class="instr" data-field="occupation">
+          <div class="instr-head"><label for="instr-occupation">What do you do?</label><span class="counter"></span></div>
+          <textarea id="instr-occupation" rows="5"></textarea>
+          <div class="row">
+            <button class="primary instr-copy">Copy</button>
+            <button class="instr-save" hidden>Save</button>
+            <button class="instr-reset link" hidden>Reset to default</button>
+          </div>
+        </div>
+        <div class="instr" data-field="additional">
+          <div class="instr-head"><label for="instr-additional">Anything else HackerAI should know about you?</label><span class="counter"></span></div>
+          <textarea id="instr-additional" rows="10"></textarea>
+          <div class="row">
+            <button class="primary instr-copy">Copy</button>
+            <button class="instr-save" hidden>Save</button>
+            <button class="instr-reset link" hidden>Reset to default</button>
+          </div>
+        </div>
+        <p id="instr-msg" class="msg" hidden></p>
+        <div class="row">
+          <a class="button" href="https://hackerai.co" target="_blank" rel="noopener">Open HackerAI</a>
+        </div>
+      </article>
+    </section>
+
+    <!-- Console -->
+    <section id="tab-console" class="tab-body" hidden>
+      <article class="card">
+        <h2>Console</h2>
+        <p class="muted">The same <code>touchless</code> commands HackerAI uses, sent to your phone from here.</p>
+        <div class="row quick">
+          <button data-cmd="guide">Guide</button>
+          <button data-cmd="call get_battery_status">Battery</button>
+          <button data-cmd="call get_screen_context">What's on screen</button>
+          <button data-cmd="call take_screenshot">Screenshot</button>
+          <button data-cmd="call get_device_info">Device</button>
+        </div>
+        <form id="console-form" class="row">
+          <input id="console-input" class="mono" placeholder="search wifi  ·  describe send_sms  ·  call launch_app package=com.android.settings" autocomplete="off">
+          <button type="submit" class="primary">Run</button>
+        </form>
+        <div id="console-out" class="console-out"></div>
+      </article>
+
+      <article class="card">
+        <h2>All phone tools</h2>
+        <p class="muted">Every tool on your phone. Search, then click one: it drops into the box above as <code>call &lt;tool&gt;</code>, ready for its arguments. <b>i</b> shows the full help.</p>
+        <div class="row">
+          <input id="tools-search" class="mono" placeholder="Search: wifi · screenshot · whatsapp · studio · mod · sms · volume …" autocomplete="off">
+          <span id="tools-count" class="muted"></span>
+        </div>
+        <div id="tools-list" class="tools-list"><p class="muted">Loading the tool list…</p></div>
+      </article>
+    </section>
+
+    <!-- Activity -->
+    <section id="tab-activity" class="tab-body" hidden>
+      <article class="card">
+        <h2>Activity</h2>
+        <p class="muted">Phone tools called through the bridge (by HackerAI and by this console), newest first. Click a row to see its arguments and result.</p>
+        <table class="activity">
+          <thead><tr><th>Time</th><th>Tool</th><th>Result</th><th class="num">ms</th></tr></thead>
+          <tbody id="activity-rows"></tbody>
+        </table>
+        <p id="activity-empty" class="muted">Nothing yet.</p>
+      </article>
+    </section>
+
+    <!-- HackerAI log -->
+    <section id="tab-log" class="tab-body" hidden>
+      <article class="card">
+        <h2>HackerAI log</h2>
+        <p class="muted">What the Remote Control client prints: connection state and every command HackerAI runs here.</p>
+        <pre id="log-out" class="log"></pre>
+      </article>
+    </section>
+  </div>
+
+  <!-- JSON viewer -->
+  <div id="json-modal" class="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="json-title">
+      <div class="modal-head">
+        <h3 id="json-title"></h3>
+        <button id="json-copy">Copy</button>
+        <button id="json-close" data-close aria-label="Close">✕</button>
+      </div>
+      <div id="json-body" class="modal-body"></div>
+    </div>
+  </div>
+</body>
+</html>
