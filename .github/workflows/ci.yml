@@ -5,11 +5,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-concurrency: { group: ci-${{ github.ref }}, cancel-in-progress: true }
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: [self-hosted, Windows]
-    defaults: { run: { shell: bash } }
+    defaults:
+      run:
+        shell: '"C:/Program Files/Git/bin/bash.exe" --noprofile --norc -eo pipefail {0}'
     steps:
       - uses: actions/checkout@v4
       - name: Syntax-check the JS

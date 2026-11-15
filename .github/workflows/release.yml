@@ -10,7 +10,9 @@ permissions: { contents: write }
 jobs:
   release:
     runs-on: [self-hosted, Windows]
-    defaults: { run: { shell: bash } }
+    defaults:
+      run:
+        shell: '"C:/Program Files/Git/bin/bash.exe" --noprofile --norc -eo pipefail {0}'
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
