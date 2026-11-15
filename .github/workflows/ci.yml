@@ -1,0 +1,22 @@
+# CI on this PC's self-hosted runner. No pull_request trigger on purpose: the repo is public, and a fork's PR
+# would otherwise run its code on this computer.
+name: CI
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency: { group: ci-${{ github.ref }}, cancel-in-progress: true }
+jobs:
+  build:
+    runs-on: [self-hosted, Windows]
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check the JS
+        run: for f in cli/*.mjs panel/*.mjs panel/ui/*.js; do node --check "$f"; done
+      - name: Build the Docker image
+        run: docker build -t touchless-hackerai-bridge:ci .
+      - name: Smoke-test the image
+        run: |
+          docker run --rm --entrypoint node touchless-hackerai-bridge:ci -e "require('fs').accessSync('/opt/bridge/panel/server.mjs')"
+          docker run --rm --entrypoint hackerai-local touchless-hackerai-bridge:ci --help > /dev/null
