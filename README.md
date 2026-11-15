@@ -42,4 +42,21 @@ It locks itself after 10 minutes idle. For access from outside your home, put it
 - HackerAI's agent runs as an unprivileged user inside the container, so it can't reach your files or keys.
 - Stop: `docker compose down`. Update: `git pull && docker compose up -d --build`.
 
+## CI and releases
+
+CI and releases run on a self-hosted GitHub Actions runner on the maintainer's PC (`.github/workflows/`).
+
+- **CI** runs on every push to `main`: syntax-checks the JS, builds the Docker image and smoke-tests it.
+- **Release**: push a tag that starts with `v`. The runner builds the image and publishes a GitHub Release with
+  the image (`docker load` it) and a source zip.
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+To re-run a release for an existing tag: Actions → Release → Run workflow, and enter the tag.
+The runner only works while that PC is on and logged in. There's no `pull_request` trigger on purpose: the repo is
+public, and a fork's PR would otherwise run its code on that machine.
+
 MIT. Bundles [@hackerai/local](https://www.npmjs.com/package/@hackerai/local) (MIT).
