@@ -1,0 +1,145 @@
+# Publish a signed Touchless Bridge APK (the Android app) as app-v<versionCode>.
+#
+# The app is built and signed in il90il90/touchless (bridge-release.yml, on the PC runner, with the key kept there).
+# That workflow publishes here with a personal token. When that token can't write to this repo, the signed APK stays
+# as that run's artifact, and this workflow publishes it from here with this repo's own token:
+#   1. put touchless-bridge-<versionName>.apk, its .sha256 and notes.md (the release notes) in app-release/ on a
+#      branch of this repo;
+#   2. run this workflow with that branch and the APK's sha256;
+#   3. delete the branch.
+#
+# Nothing is published unless the file is the Bridge app, has the sha256 given, and is signed with the "Touchless
+# Bridge" certificate below. The app's updater installs the highest app-v<N> that is not a draft, so the release is a
+# draft until both files are attached, and a published app-v<N> is never replaced.
+#
+# It runs on GitHub's machine, not on the PC runner: it needs the Android build-tools, and it only reads the
+# branch's files (no code from the branch runs). This repo is public, so that costs no Actions minutes.
+name: App release
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch that holds app-release/ (the APK, its .sha256, notes.md)"
+        required: true
+      sha256:
+        description: "sha256 of the APK to publish"
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: app-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TARGET: ${{ github.event.repository.default_branch }}
+      EXPECTED_PACKAGE: com.il90.touchless.hackeraibridge
+      # The same value as EXPECTED_CERT_SHA256 in il90il90/touchless's bridge-release.yml (CN=Touchless Bridge, O=il90,
+      # C=IL; every Bridge from 1.1.22 / app-v24 on).
+      EXPECTED_CERT_SHA256: 8dd55bd7e68e00291ecdbec27059b2d17d2ff6d47a70ec9e2cb10e1e85928c8b
+      WANT_SHA: ${{ inputs.sha256 }}
+    steps:
+      - name: Check out the branch with the APK
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Check the APK (sha256, package, version, signing certificate)
+        id: apk
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(app-release/*.apk)
+          if [[ ${#apks[@]} -ne 1 ]]; then
+            echo "::error::app-release/ must hold exactly one .apk (found ${#apks[@]})."
+            exit 1
+          fi
+          src="${apks[0]}"
+          file="$(basename "$src")"
+          sha="$(sha256sum "$src" | cut -d' ' -f1)"
+          if [[ "$sha" != "${WANT_SHA,,}" ]]; then
+            echo "::error::$file has sha256 $sha, not the one given; nothing is published."
+            exit 1
+          fi
+          if [[ ! -f "$src.sha256" || "$(cut -d' ' -f1 "$src.sha256")" != "$sha" ]]; then
+            echo "::error::$file.sha256 is missing or doesn't match the APK; nothing is published."
+            exit 1
+          fi
+          bt="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
+          badging="$("$bt/aapt2" dump badging "$src")"
+          first="$(sed -n '1p' <<< "$badging")"
+          echo "$first"
+          pkg="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<< "$first")"
+          code="$(sed -n "s/.* versionCode='\([^']*\)'.*/\1/p" <<< "$first")"
+          name="$(sed -n "s/.* versionName='\([^']*\)'.*/\1/p" <<< "$first")"
+          [[ "$pkg" == "$EXPECTED_PACKAGE" ]] || { echo "::error::package is '$pkg', not $EXPECTED_PACKAGE."; exit 1; }
+          [[ "$code" =~ ^[0-9]+$ ]] || { echo "::error::bad versionCode '$code'."; exit 1; }
+          [[ "$name" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad versionName '$name'."; exit 1; }
+          if [[ "$file" != "touchless-bridge-${name}.apk" ]]; then
+            echo "::error::the file must be named touchless-bridge-${name}.apk (it is $file)."
+            exit 1
+          fi
+          certs="$("$bt/apksigner" verify --print-certs "$src")"
+          cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$certs")"
+          if [[ "$cert" != "$EXPECTED_CERT_SHA256" ]] || grep -q '^Signer #2 ' <<< "$certs"; then
+            echo "::error::signed with '$cert' (or by more than one signer), not the Touchless Bridge key; nothing is published."
+            exit 1
+          fi
+          {
+            echo "src=$src"
+            echo "file=$file"
+            echo "sha=$sha"
+            echo "code=$code"
+            echo "name=$name"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish app-v${{ steps.apk.outputs.code }} (a draft until both files are attached)
+        env:
+          SRC: ${{ steps.apk.outputs.src }}
+          FILE: ${{ steps.apk.outputs.file }}
+          SHA: ${{ steps.apk.outputs.sha }}
+          CODE: ${{ steps.apk.outputs.code }}
+          NAME: ${{ steps.apk.outputs.name }}
+        run: |
+          set -euo pipefail
+          tag="app-v${CODE}"
+          draft="$(gh release view "$tag" --json isDraft -q .isDraft 2>/dev/null || true)"
+          if [[ "$draft" == "false" ]]; then
+            echo "::error::$tag is already published; a published release is never replaced."
+            exit 1
+          fi
+          # A draft left by a failed run is replaced.
+          if [[ "$draft" == "true" ]]; then
+            gh release delete "$tag" --yes
+          fi
+          notes="${RUNNER_TEMP}/notes.md"
+          if [[ -f app-release/notes.md ]]; then
+            cp app-release/notes.md "$notes"
+          else
+            echo "Touchless Bridge ${NAME}." > "$notes"
+          fi
+          printf '\nSHA-256: %s\n' "$SHA" >> "$notes"
+          gh release create "$tag" "$SRC" "$SRC.sha256" --draft --target "$TARGET" \
+            --title "Touchless Bridge ${NAME}" --notes-file "$notes"
+          gh release edit "$tag" --draft=false
+          # Download it back as a phone would, and compare.
+          for i in $(seq 1 30); do
+            if curl -fsSL -o "${RUNNER_TEMP}/check.apk" \
+                "https://github.com/${GH_REPO}/releases/download/${tag}/${FILE}"; then
+              got="$(sha256sum "${RUNNER_TEMP}/check.apk" | cut -d' ' -f1)"
+              if [[ "$got" == "$SHA" ]]; then
+                echo "Published ${tag}: ${FILE} (${SHA})"
+                echo "### Touchless Bridge ${NAME} published as ${tag} (sha256 ${SHA})" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "::error::the published APK's sha256 is $got, expected $SHA"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "::error::${tag} was published but its APK isn't downloadable yet; check the release page."
+          exit 1
