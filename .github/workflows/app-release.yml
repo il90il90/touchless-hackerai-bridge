@@ -83,10 +83,12 @@ jobs:
             echo "::error::the file must be named touchless-bridge-${name}.apk (it is $file)."
             exit 1
           fi
+          # Every certificate apksigner reports must be the expected one. Its lines differ by version: build-tools 36
+          # prints "Signer #1 certificate SHA-256 digest: ...", 37 prints "V2 Signer: certificate SHA-256 digest: ...".
           certs="$("$bt/apksigner" verify --print-certs "$src")"
-          cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$certs")"
-          if [[ "$cert" != "$EXPECTED_CERT_SHA256" ]] || grep -q '^Signer #2 ' <<< "$certs"; then
-            echo "::error::signed with '$cert' (or by more than one signer), not the Touchless Bridge key; nothing is published."
+          found="$(sed -n 's/^.*certificate SHA-256 digest: //p' <<< "$certs" | sort -u)"
+          if [[ "$found" != "$EXPECTED_CERT_SHA256" ]]; then
+            echo "::error::signed with '$(tr '\n' ' ' <<< "$found")', not only the Touchless Bridge key; nothing is published."
             exit 1
           fi
           {
