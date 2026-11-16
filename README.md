@@ -59,4 +59,9 @@ To re-run a release for an existing tag: Actions → Release → Run workflow, a
 The runner only works while that PC is on and logged in. There's no `pull_request` trigger on purpose: the repo is
 public, and a fork's PR would otherwise run its code on that machine.
 
+**App release** (Actions → App release → Run workflow) publishes a signed Touchless Bridge Android APK as
+`app-v<versionCode>`. The app is built and signed in the Touchless repo; the steps are at the top of
+`.github/workflows/app-release.yml`. It checks the APK's signing certificate before publishing. It is the one
+workflow that runs on GitHub's machine: it runs no code from the repo, and needs the Android build-tools.
+
 MIT. Bundles [@hackerai/local](https://www.npmjs.com/package/@hackerai/local) (MIT).
